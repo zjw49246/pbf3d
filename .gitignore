@@ -1,0 +1,7 @@
+*.pdf
+pbf2d.py
+mpm3d.py
+render_test.py
+*.ini
+*.ipynb
+*.idea/
