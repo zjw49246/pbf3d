@@ -6,8 +6,14 @@ import taichi as ti
 
 ti.init(arch=ti.gpu, debug=True)
 
-screen_res = (400, 200)
-depth_res = 200
+window_size = (800, 400)
+screen_res = (800, 400)
+depth_res = 100
+window_size_x_recpr = 1.0 / window_size[0]
+window_size_y_recpr = 1.0 / window_size[1]
+screen_res_x_recpr = 1.0 / screen_res[0]
+screen_res_y_recpr = 1.0 / screen_res[1]
+depth_res_recpr = 1.0 / depth_res
 screen_to_world_ratio = 10.0
 boundary = (screen_res[0] / screen_to_world_ratio,
             screen_res[1] / screen_to_world_ratio,
@@ -24,12 +30,13 @@ grid_size = (round_up(boundary[0], 1),
 
 dim = 3
 bg_color = 0x112f41
-particle_color = (116/256, 204/256, 244/256)
+water_color = (116/256, 204/256, 244/256)
+particle_color = (0/256, 0/256, 255/256)
 boundary_color = 0xebaca2
-num_particles_x = 25
-num_particles_xy = num_particles_x * 10
-num_particles = num_particles_xy * 15
-max_num_particles_per_cell = 200
+num_particles_x = 50
+num_particles_xy = num_particles_x * 20
+num_particles = num_particles_xy * 10
+max_num_particles_per_cell = 500
 max_num_neighbors = 100
 time_delta = 1.0 / 20.0
 epsilon = 1e-5
@@ -41,7 +48,7 @@ h_ = 1.1
 mass = 1.0
 rho0 = 1.0
 lambda_epsilon = 100.0
-pbf_num_iters = 5
+pbf_num_iters = 2
 corr_deltaQ_coeff = 0.3
 corrK = 0.001
 
@@ -53,27 +60,37 @@ spiky_grad_factor = -45.0 / math.pi
 
 ### marching cubes
 mc_table_list = []
-cube_size = 0.5
-cube_recpr = 1.0 / cube_size
-max_num_particles_per_cube = 200
+cube_size_x = 0.75
+cube_size_y = 0.75
+cube_size_z = 0.75
+cube_recpr_x = 1.0 / cube_size_x
+cube_recpr_y = 1.0 / cube_size_y
+cube_recpr_z = 1.0 / cube_size_z
+max_num_particles_per_cube = 500
 density_threshold = 0.075
-max_mc_triangles = 100000
+max_mc_triangles = 300000
 max_mc_vertices = 3 * max_mc_triangles
-# vertex_neghbor_cube_offset = {
-#     0: [(0, -1, 0), (0, -1, -1), (-1, -1, 0), (-1, -1, -1), (0, 0, 0), (0, 0, -1), (-1, 0, 0), (-1, 0, -1)],
-#     1: [(1, -1, 0), (1, -1, -1), (0, -1, 0), (0, -1, -1), (1, -1, 0), (1, -1, -1), (0, -1, 0), (0, -1, -1)]
-# }
+vertex_neighbor_cube_offset_list = [
+    [[0, -1, 0], [0, -1, -1], [-1, -1, 0], [-1, -1, -1], [0, 0, 0], [0, 0, -1], [-1, 0, 0], [-1, 0, -1]],
+    [[1, -1, 0], [1, -1, -1], [0, -1, 0], [0, -1, -1], [1, 0, 0], [1, 0, -1], [0, 0, 0], [0, 0, -1]],
+    [[1, -1, 1], [1, -1, 0], [0, -1, 0], [0, -1, 1], [1, 0, 1], [1, 0, 0], [0, 0, 0], [0, 0, 1]],
+    [[0, -1, 1], [0, -1, 0], [-1, -1, 0], [-1, -1, 1], [0, 0, 1], [0, 0, 0], [-1, 0, 0], [-1, 0, 1]],
+    [[0, 0, 0], [0, 0, -1], [-1, 0, 0], [-1, 0, -1], [0, 1, 0], [0, 1, -1], [-1, 1, 0], [-1, 1, -1]],
+    [[1, 0, 0], [1, 0, -1], [0, 0, 0], [0, 0, -1], [1, 1, 0], [1, 1, -1], [0, 1, 0], [0, 1, -1]],
+    [[1, 0, 1], [1, 0, 0], [0, 0, 0], [0, 0, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0], [0, 1, 1]],
+    [[0, 0, 1], [0, 0, 0], [-1, 0, 0], [-1, 0, 1], [0, 1, 1], [0, 1, 0], [-1, 1, 0], [-1, 1, 1]]
+]
 
 mc_edge2vertices_list = [[0, 1], [1, 2], [2, 3], [0, 3],
                          [4, 5], [5, 6], [6, 7], [7, 4],
                          [0, 4], [1, 5], [2, 6], [3, 7]]
 
-def round_up_cube(f, s):
+def round_up_cube(f, s, cube_recpr):
     return (math.floor(f * cube_recpr / s) + 1) * s
 
-cube_num = (round_up_cube(boundary[0], 1),
-             round_up_cube(boundary[1], 1),
-             round_up_cube(boundary[2], 1))
+cube_num = (round_up_cube(boundary[0], 1, cube_recpr_x),
+            round_up_cube(boundary[1], 1, cube_recpr_y),
+            round_up_cube(boundary[2], 1, cube_recpr_z))
 
 old_positions = ti.Vector.field(dim, float)
 positions = ti.Vector.field(dim, float)
@@ -99,6 +116,7 @@ mc_vertices = ti.Vector.field(dim, float)
 mc_id = ti.field(int)
 mc_table = ti.field(int, shape=(256, 16))
 mc_edge2vertices = ti.field(int, shape=(12, 2))
+vertex_neighbor_cube_offset = ti.Vector.field(dim, int)
 
 
 
@@ -118,11 +136,15 @@ cube_snode = ti.root.dense(ti.ijk, cube_num)
 cube_snode.place(mc_id, cube_num_particles)
 cube_snode.dense(ti.l, 8).place(cube_vertices_pos, cube_vertices_density)
 cube_snode.dense(ti.l, max_num_particles_per_cube).place(cube_particles)
+ti.root.dense(ti.i, 8).dense(ti.j, 8).place(vertex_neighbor_cube_offset)
 ti.root.dense(ti.i, max_mc_vertices).place(mc_vertices)
 
 @ti.func
 def get_cube(pos):
-    return int(pos * cube_recpr)
+    pos.x *= cube_recpr_x
+    pos.y *= cube_recpr_y
+    pos.z *= cube_recpr_z
+    return int(pos)
 
 @ti.func
 def is_in_cube(c):
@@ -171,16 +193,16 @@ def is_in_grid(c):
         1] < grid_size[1] and 0 <= c[2] and c[2] < grid_size[2]
 
 @ti.func
-def confine_position_to_boundary(p):
+def confine_position_to_boundary(p, v):
     bmin = particle_radius_in_world
     bmax = ti.Vector([board_states[None][0], boundary[1], boundary[2]
                       ]) - particle_radius_in_world
     for i in ti.static(range(dim)):
         # Use randomness to prevent particles from sticking into each other after clamping
         if p[i] <= bmin:
-            p[i] = bmin + epsilon * ti.random()
+            p[i] = bmin - epsilon * v[i]
         elif bmax[i] <= p[i]:
-            p[i] = bmax[i] - epsilon * ti.random()
+            p[i] = bmax[i] - epsilon * v[i]
     return p
 
 @ti.kernel
@@ -189,7 +211,7 @@ def move_board():
     b = board_states[None]
     b[1] += 1.0
     period = 90
-    vel_strength = 5.0
+    vel_strength = 6.0
     if b[1] >= 2 * period:
         b[1] = 0
     b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta
@@ -206,7 +228,7 @@ def prologue():
         pos, vel = positions[i], velocities[i]
         vel += g * time_delta
         pos += vel * time_delta
-        positions[i] = confine_position_to_boundary(pos)
+        positions[i] = confine_position_to_boundary(pos, vel)
 
     # clear neighbor lookup table
     for I in ti.grouped(grid_num_particles):
@@ -293,8 +315,8 @@ def substep():
 def epilogue():
     # confine to boundary
     for i in positions:
-        pos = positions[i]
-        positions[i] = confine_position_to_boundary(pos)
+        pos, vel = positions[i], velocities[i]
+        positions[i] = confine_position_to_boundary(pos, vel)
     # update velocities
     for i in positions:
         velocities[i] = (positions[i] - old_positions[i]) / time_delta
@@ -312,7 +334,7 @@ def init_particles():
         delta = h_ * 0.8
         offs = ti.Vector([(boundary[0] - delta * num_particles_x) * 0.5,
                           boundary[1] * 0.02,
-                          (boundary[2] - delta * num_particles // num_particles_xy) * 0.5])
+                          (boundary[2] - delta * (num_particles // num_particles_xy)) * 0.5])
         positions[i] = ti.Vector([i % num_particles_x,
                                   (i % num_particles_xy) // num_particles_x,
                                   i // num_particles_xy]) * delta + offs
@@ -322,9 +344,9 @@ def init_particles():
 
 @ti.func
 def normalize_to_render(pos):
-    pos.x *= screen_to_world_ratio / screen_res[0]
-    pos.y *= screen_to_world_ratio / screen_res[1]
-    pos.z *= screen_to_world_ratio / depth_res
+    pos.x *= screen_to_world_ratio * screen_res_x_recpr
+    pos.y *= screen_to_world_ratio * screen_res_y_recpr
+    pos.z *= screen_to_world_ratio * depth_res_recpr
 
     return pos
 #
@@ -332,15 +354,16 @@ def normalize_to_render(pos):
 @ti.func
 def compute_cube_vertices(cube):
     for i in ti.ndrange(4):
-        for k in ti.ndrange(3):
-            cube_vertices_pos[cube, i][k] = cube[k] * cube_size
-    cube_vertices_pos[cube, 1][0] += cube_size
-    cube_vertices_pos[cube, 2][0] += cube_size
-    cube_vertices_pos[cube, 2][2] += cube_size
-    cube_vertices_pos[cube, 3][2] += cube_size
+        cube_vertices_pos[cube, i][0] = cube[0] * cube_size_x
+        cube_vertices_pos[cube, i][1] = cube[1] * cube_size_y
+        cube_vertices_pos[cube, i][2] = cube[2] * cube_size_z
+    cube_vertices_pos[cube, 1][0] += cube_size_x
+    cube_vertices_pos[cube, 2][0] += cube_size_x
+    cube_vertices_pos[cube, 2][2] += cube_size_z
+    cube_vertices_pos[cube, 3][2] += cube_size_z
     for i in ti.ndrange((4, 8)):
         cube_vertices_pos[cube, i][0] = cube_vertices_pos[cube, i - 4][0]
-        cube_vertices_pos[cube, i][1] = cube_vertices_pos[cube, i - 4][1] + cube_size
+        cube_vertices_pos[cube, i][1] = cube_vertices_pos[cube, i - 4][1] + cube_size_y
         cube_vertices_pos[cube, i][2] = cube_vertices_pos[cube, i - 4][2]
 
 @ti.func
@@ -353,6 +376,13 @@ def find_particles_in_all_cubes():
         cube = get_cube(pos)
         offs = ti.atomic_add(cube_num_particles[cube], 1)
         cube_particles[cube, offs] = p_i
+
+        # # one particle exists in many cubes around it
+        # for offs in ti.static(ti.grouped(ti.ndrange((-1, 2), (-1, 2), (-1, 2)))):
+        #     cube_to_check = cube + offs
+        #     if is_in_grid(cube_to_check):
+        #         num = ti.atomic_add(cube_num_particles[cube_to_check], 1)
+        #         cube_particles[cube, num] = p_i
 
 @ti.kernel
 def marching_cube():
@@ -370,14 +400,15 @@ def marching_cube():
         for i in ti.static(range(8)):
             cube_vertices_density[cube, i] = 0
             pos_vertex_i = cube_vertices_pos[cube, i]
-            for offs in ti.static(ti.grouped(ti.ndrange((-1, 2), (-1, 2), (-1, 1)))):
+            for neighbor in ti.static(ti.ndrange(8)):
             # for offs in ti.static(ti.grouped(ti.ndrange((0, 1), (0, 1), (0, 1)))):
+                offs = vertex_neighbor_cube_offset[i, neighbor]
                 cube_to_check = cube + offs
                 if is_in_cube(cube_to_check):
                     for j in range(cube_num_particles[cube_to_check]):
                         p_j = cube_particles[cube_to_check, j]
                         vertex_i_p_j_norm = (pos_vertex_i - positions[p_j]).norm()
-                        if vertex_i_p_j_norm < h_:
+                        if vertex_i_p_j_norm < 0.5 * h_:
                             cube_vertices_density[cube, i] += density[p_j] * poly6_value(vertex_i_p_j_norm, h_)
 
         mc_id[cube] = 0
@@ -412,11 +443,11 @@ def marching_cube():
             v1 = mc_edge2vertices[edge, 1]
             pos_v0 = cube_vertices_pos[cube, v0]
             pos_v1 = cube_vertices_pos[cube, v1]
-            # density_v0 = abs(cube_vertices_density[cube, v0] - density_threshold)
-            # density_v1 = abs(cube_vertices_density[cube, v1] - density_threshold)
-            # sum_recpr = 1 / (density_v0 + density_v1)
-            # pos_interp = pos_v0 + (pos_v1 - pos_v0) * sum_recpr * density_v1
-            pos_interp = (pos_v1 + pos_v0) / 2
+            density_v0 = cube_vertices_density[cube, v0] - density_threshold
+            density_v1 = cube_vertices_density[cube, v1] - density_threshold
+            sum_recpr = 1 / (density_v1 - density_v0)
+            pos_interp = pos_v0 + (pos_v1 - pos_v0) * sum_recpr * density_v1
+            # pos_interp = (pos_v1 + pos_v0) / 2
             if (j == 0):
                 offs = ti.atomic_add(mc_num_vertices[None], 3)
             mc_vertices[offs + j] = normalize_to_render(pos_interp)
@@ -445,19 +476,30 @@ def read_mc_table():
         for j in range(2):
             mc_edge2vertices[i, j] = mc_edge2vertices_list[i][j]
 
+def initialize_vertex_neighbor_cube_offset():
+    for i in range(8):
+        for j in range(8):
+            for k in range(3):
+                vertex_neighbor_cube_offset[i, j][k] = vertex_neighbor_cube_offset_list[i][j][k]
+
+
 @ti.kernel
 def normalize_positions():
     for i in positions:
         render_positions[i] = normalize_to_render(positions[i])
 
 def main():
+    result_dir = "./results"
+    video_manager = ti.tools.VideoManager(output_dir=result_dir, framerate=24, automatic_build=False)
+
     init_particles()
     print(f'boundary={boundary} grid={grid_size} cell_size={cell_size}')
     read_mc_table()
+    initialize_vertex_neighbor_cube_offset()
     # print(mc_table)
     # print(mc_edge2vertices)
 
-    window = ti.ui.Window('PBF3D', screen_res,
+    window = ti.ui.Window('PBF3D', window_size,
                           vsync=True)
     canvas = window.get_canvas()
     canvas.set_background_color((1, 1, 1))
@@ -465,11 +507,13 @@ def main():
     camera = ti.ui.Camera()
 
     camera.position(0.4, 0.5, 1.8)
+    # camera.position(0.4, 0.5, 1.8)
     camera.lookat(0.4, 0.15, 0.5)
     camera.up(0, 1, 0)
+    # camera.up(0, 1, 0)
     scene.set_camera(camera)
-    scene.point_light(pos=(0, 1, 2), color=(1, 1, 1))
     scene.ambient_light((1, 1, 1))
+    # scene.ambient_light((0, 0, 0))
 
     while window.running:
         if window.get_event(ti.ui.PRESS):
@@ -482,10 +526,13 @@ def main():
         # print(render_positions[4])
         normalize_positions()
         particle_radius_render = particle_radius_in_world * screen_to_world_ratio / screen_res[0]
-        # scene.particles(render_positions, radius=particle_radius_render, color=particle_color)
+        scene.particles(render_positions, radius=particle_radius_render, color=water_color)
         # print("aaa")
-        marching_cube()
-        scene.mesh(mc_vertices, vertex_count=mc_num_vertices[None], two_sided=True, color=particle_color)
+        # marching_cube()
+        # scene.point_light(pos=(0.4, 0.5, -1.8), color=(1, 1, 1))
+        # scene.point_light(pos=(-0.4, 1.5, 0), color=(1, 1, 1))
+        # scene.point_light(pos=(0.8, 10.5, 0), color=(1, 1, 1))
+        # scene.mesh(mc_vertices, vertex_count=mc_num_vertices[None], two_sided=True, color=water_color)
 
         canvas.scene(scene)
         window.show()

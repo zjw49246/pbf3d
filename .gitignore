@@ -5,3 +5,5 @@ render_test.py
 *.ini
 *.ipynb
 *.idea/
+history/
+results/
